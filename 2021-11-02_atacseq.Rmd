@@ -1,0 +1,256 @@
+---
+title: "Microglia ATAC-seq"
+author: "Carl Herrmann"
+date: "02/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,cache=TRUE)
+knitr::opts_chunk$set(root.dir='/media/ag-cherrmann/projects/06_HIV_Microglia/data/atacseq/data-2020-11-06/microglia')
+```
+
+```{r}
+main.dir = '/media/ag-cherrmann/projects/06_HIV_Microglia/data/atacseq/data-2020-11-06/microglia'
+out.dir = file.path(main.dir,'analysis_carl/analysis/atac')
+good.chrom = c(paste0('chr',1:22),'chrX')
+library(csaw)
+```
+Differential ATAC-seq analysis between the different conditions.
+
+Find the bam files:
+
+```{r}
+bam.files = list.files(main.dir,recursive=TRUE,pattern = "*.rep.*mapq_mkdup_sorted.bam$",full.name=TRUE)
+names = gsub('microglia_','',gsub('_mapq_mkdup_sorted.bam','',basename(bam.files)))
+```
+
+
+## 1. Some QC
+
+```{r}
+out = lapply(bam.files,getPESizes)
+names(out) = names
+```
+
+Plot the fragment size distribution:
+
+
+```{r}
+lapply(names(out),function(n) {
+  pdf(file.path(out.dir,paste0(Sys.Date(),'_AtacPatterns_',n,'.pdf')));
+  hist(out[[n]]$sizes[out[[n]]$sizes<=800],main=n,breaks=200)
+  dev.off()
+  })
+```
+
+
+## 2. analysis of called peaks
+
+Import the called peaks and build a merged file
+
+
+```{r}
+peak.files = list(file.path(main.dir,'uninf/macs2/microglia_uninf_narrowPeaks_Blacklisted.bed'),
+                  file.path(main.dir,'gfp/macs2/microglia_gfp_mergedrep1_2_peaks.narrowPeak_Blacklisted.bed'),
+                  file.path(main.dir,'red/macs2/microglia_red_mergedrep1_3_peaks.narrowPeak_Blacklisted.bed'))
+##
+peaks = lapply(peak.files,function(x) {
+  y = read.table(x,as.is=TRUE)[,c(1:5,9)]
+  y = y[y[,1] %in% good.chrom,]
+  colnames(y) = c('Chr','start','end','name','score','qval')
+  makeGRangesFromDataFrame(y,keep.extra.columns=TRUE)
+})
+names(peaks) = c('uninf','gfp','red')
+```
+
+How many peaks?
+
+```{r}
+sapply(peaks,length)
+```
+
+```{r}
+sapply(peaks,head)
+```
+
+
+Compute FRIP
+
+```{r}
+library(encodeChIPqc)
+#
+i.gfp = grep('gfp',bam.files)
+i.red = grep('red',bam.files)
+i.uninf = grep('uninf',bam.files)
+#
+frip.gfp = sapply(i.gfp,function(i) {frip(bam.files[[i]],peaks[[2]])})
+frip.red = sapply(i.red,function(i) {frip(bam.files[[i]],peaks[[3]])})
+frip.uninf = sapply(i.uninf,function(i) {frip(bam.files[[i]],peaks[[1]])})
+```
+
+```{r}
+frip.gfp;frip.red;frip.uninf
+```
+
+
+
+Let's look at the distribution of scores over the 3 conditions:
+
+```{r}
+scores = lapply(peaks,function(x) {x$score})
+plot(density(log2(scores[[1]])),
+     col='darkgrey',
+     lwd=3,
+     main='Score distribution of peaks',
+     xlab='log2(scores)',
+     ylim=c(0,0.4));lines(density(log2(scores[[2]])),col='green',lwd=3);lines(density(log2(scores[[3]])),col='red',lwd=3);abline(v=5,lty=3,lwd=2)
+```
+
+
+We only keep the good peaks, i.e. the peaks which have a MACS2 score of 30 or above:
+
+```{r}
+min.score = 30
+good.peaks = lapply(peaks,function(x) {x[x$score >= min.score]})
+names(good.peaks) = NULL
+all.peaks = reduce(do.call('c',good.peaks))
+names(good.peaks) = names(peaks)
+save(good.peaks,all.peaks,file=file.path(out.dir,paste0(Sys.Date(),'_ATAC_goodPeaks_allPeaks.rda')))
+```
+
+
+
+
+How many good peaks do we have?
+
+```{r}
+sapply(good.peaks,length)
+```
+
+
+### Save the peaks
+
+```{r}
+xx = good.peaks
+names(xx) = NULL
+all.good.peaks = reduce(do.call('c', xx))
+```
+
+```{r}
+xx = peaks
+names(xx) = NULL
+all.peaks = reduce(do.call('c', xx))
+```
+
+```{r}
+save(all.peaks,all.good.peaks,peaks,good.peaks,file=file.path(out.dir,paste0(Sys.Date(),'_ATAC_goodPeaks_allPeaks.rda')))
+```
+
+
+
+### Annotation of good peaks
+
+```{r}
+library(ChIPseeker)
+```
+
+```{r,fig.height=10}
+col = c('darkgrey','green','red')
+barplot(t(sapply(good.peaks,function(x) {table(seqnames(x))})),beside = TRUE,col=col,horiz=TRUE,las=2)
+```
+
+Let us annotate the peaks to the closest genes:
+
+
+```{r}
+library(org.Hs.eg.db)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+txdb = TxDb.Hsapiens.UCSC.hg38.knownGene
+```
+
+
+```{r, error=FALSE}
+good.peaks.anno = lapply(good.peaks,function(x) 
+  {y = annotatePeak(x,
+  tssRegion=c(-3000, 3000),
+  TxDb=txdb, annoDb="org.Hs.eg.db")
+  as.GRanges(y)
+  })
+good.peaks.anno = lapply(good.peaks.anno,function(x) {x[order(x$score,decreasing=TRUE)]})
+```
+
+```{r}
+par(mar=c(5,10,5,1),las=2,mfrow=c(1,3));sapply(1:3,function(i) {
+  barplot(table(gsub(" \\(ENST.*",'',good.peaks.anno[[i]]$annotation)),
+           horiz=TRUE,
+           main=names(good.peaks.anno)[i])
+    })
+```
+
+How are the target genes related?
+
+
+```{r}
+library(UpSetR)
+targets = lapply(good.peaks.anno,function(x) {x$geneId})
+upset(fromList(targets), order.by = "freq")
+```
+
+
+
+
+```{r}
+dtss = lapply(good.peaks.anno,function(x) {y = x$distanceToTSS;y[abs(y) < 10000]})
+plot(density(dtss[[1]]),
+     col='green',
+     lwd=2,
+     main='Distance to TSS distribution of peaks',
+     xlab='Distance to TSS',ylim=c(0,0.001));lines(density(dtss[[2]]),col='red',lwd=2);lines(density(dtss[[3]]),col='darkgrey',lwd=2)
+```
+
+
+### Functional enrichment analysis
+
+Now perform an enrichment analysis, using the 1000 strongest peaks for each condition
+
+```{r, echo=FALSE}
+library(ReactomePA)
+library(clusterProfiler)
+library(biomaRt)
+```
+
+
+```{r}
+ensembl <- useMart("ensembl")
+ensembl = useDataset("hsapiens_gene_ensembl",mart=ensembl)
+geneList = getBM(attributes=c("entrezgene_id"),mart= ensembl)
+
+#ego = lapply(top.n.peaks, function(x) {
+ego = lapply(good.peaks.anno, function(x) {
+  enrichGO(gene          = unique(x$geneId),
+           universe      = as.character(geneList[,1]),
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.1,
+        readable      = TRUE)
+})
+
+lapply(ego,head)
+```
+
+Export the tables
+
+```{r}
+lapply(names(ego),function(n) {
+  write.table(as.data.frame(ego[[n]])[,-8],
+              quote=FALSE,sep='\t',
+              file=file.path(out.dir,paste0(Sys.Date(),'_',n, '_GO.csv')))
+})
+```
+
+
+
+

@@ -1,0 +1,320 @@
+---
+title: "2021-07-26_diffATAC"
+author: "Carl Herrmann"
+date: "26/07/2021"
+output: html_document
+---
+
+
+Differential ATAC-seq analysis between the different conditions.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,cache=TRUE)
+knitr::opts_chunk$set(root.dir='/media/ag-cherrmann/projects/06_HIV_Microglia/data/atacseq/data-2020-11-06/microglia')
+```
+
+```{r}
+main.dir = '/media/ag-cherrmann/projects/06_HIV_Microglia/data/atacseq/data-2020-11-06/microglia'
+out.dir = file.path(main.dir,'analysis_carl/analysis/atac')
+good.chrom = c(paste0('chr',1:22),'chrX')
+library(csaw)
+```
+
+
+Find the bam files:
+
+```{r}
+bam.files = list.files(main.dir,recursive=TRUE,pattern = "*.rep.*mapq_mkdup_sorted.bam$",full.name=TRUE)
+names = gsub('microglia_','',gsub('_mapq_mkdup_sorted.bam','',basename(bam.files)))
+names
+```
+
+
+We only keep the non-merged bam files (i.e. for each replicate individually)
+
+```{r}
+i.keep = !grepl('merged',names)
+bam.files = bam.files[i.keep]
+names = names[i.keep]
+```
+
+
+
+Load all good quality peaks in each condition and the union of all:
+
+```{r}
+##
+## This rda object contains the following objects
+## 1. peaks = list of all peaks for 3 condition
+## 2. good.peaks = list of all peaks with score >= 30 for 3 conditions
+## 3. all.peaks = list of reduced peaks
+## 4. all.good.peaks = list of reduced good peaks
+##
+load(file.path(out.dir,paste0('2021-11-04_ATAC_goodPeaks_allPeaks.rda')))
+```
+
+## 1. Counting reads
+
+```{r, message=FALSE, warning=FALSE}
+parammc = BiocParallel::MulticoreParam(workers=20)
+frag.len = 110
+win.width = 100
+param = readParam(minq=20,pe='both',restrict = good.chrom)
+data = windowCounts(bam.files, ext=frag.len, 
+                    width=win.width, 
+                    param=param,
+                    spacing=100,
+                    BPPARAM = parammc)
+```
+
+
+
+We select two sets of regions:
+1. bins which overlap the peak regions, in order to select high enrichment regions
+2. all bins (with a minimal filtering of abundances > -1)
+
+Filter the windows with the merged peaks
+
+```{r}
+keep = overlapsAny(rowRanges(data), all.good.peaks)
+data.peaks = data[keep]
+```
+
+
+```{r}
+abundances = aveLogCPM(asDGEList(data))
+summary(abundances)
+data.filt = data[abundances>-1,]
+```
+
+
+## 2. Normalization factor
+
+We can use two distinct normalization strategies, either taking into account the highly enriched bins (data.peaks) or (almost) all bins (data.filt).
+
+In the first strategy, we assume that most peak regions do not correspond to differential regions; hence, differences between the counts at these highly enriched regions should be considered as normalization effects. We hence use the normalization strategy of section 4.3 of the csaw manual.
+
+```{r, warning=FALSE}
+binned = windowCounts(bam.files, 
+                      bin=TRUE, 
+                      width=10000, param=param,BPPARAM = parammc) 
+##
+h = hist(filterWindowsGlobal(data.peaks,binned)$filter,breaks=200,plot = FALSE)
+plot(h$breaks[-1],h$counts,log='y',type='h')
+```
+
+
+### strategy 1: linear normalization on enriched regions
+
+```{r}
+data.filt.43 = data.filt
+data.filt.43$norm.factors = NULL
+data.filt.43 = normFactors(data.peaks,se.out=data.filt.43)
+data.filt.43$norm.factors
+```
+
+
+### strategy 2: normalization on all windows (not anly the top enriched ones!)
+
+If instead we perform the normalization on all bins (this is section 4.2 of the csaw manual)
+
+```{r}
+data.filt.42 = data.filt
+data.filt.42$norm.factors = NULL
+data.filt.42 = normFactors(binned, se.out=data.filt.42)
+data.filt.42$norm.factors
+```
+
+# [1] 0.7967477 0.8607010 0.9603953 1.0474321 1.3737041 1.3499521 0.8899341 0.8783783
+
+```{r}
+library(edgeR)
+adj.counts <- cpm(asDGEList(binned), log=TRUE) 
+normfacs.42 = data.filt.42$norm.factors
+normfacs.43 = data.filt.43$norm.factors
+
+for (i in 1:(length(bam.files)-1)) {
+  cur.x <- adj.counts[,i]
+  for  (j in (i+1):length(bam.files)) {
+    cur.y <- adj.counts[,j] 
+    smoothScatter(x=(cur.x+cur.y)/2+6*log2(10), 
+                y=cur.x-cur.y,
+                xlab="A", ylab="M", 
+                main=paste(names[i]," vs ", names[j])) 
+  all.dist.42 <- diff(log2(normfacs.42[c(j, i)]))
+  all.dist.43 <- diff(log2(normfacs.43[c(j, i)]))
+  abline(h=c(all.dist.42,all.dist.43), col=c("red",'magenta')) 
+  }
+}
+```
+
+
+Keep in mind that the magenta normalization is performed on the bins overlapping the peak regions; hence, the horizontal normalization line goes through the highly enriched regions (high A values), not through the bulk!
+
+
+Problematic samples seem to be (in decreasing order of problem...)
+ 
+* red_02
+* gfp_03
+
+So we remove these problematic samples, and recompute the norm factors
+
+```{r}
+remove = c('gfp_rep03','red_rep02')
+##
+data.sub = data.filt.43[,!(names %in% remove)]
+```
+
+```{r}
+data.sub$norm.factors = NULL
+data.sub = normFactors(data.peaks[,!(names %in% remove)],se.out=data.sub)
+data.sub$norm.factors
+
+```
+ 
+
+## 3. differential binding
+
+```{r}
+y = asDGEList(data.sub)
+```
+
+
+DEsign matrix
+
+```{r}
+conditions = as.factor(c('gfp','gfp','red','red','uninf','uninf'))
+
+design = model.matrix(~0+conditions)
+colnames(design) = c('gfp','red','uninf')
+design
+```
+
+```{r}
+y = estimateDisp(y,design)
+summary(y$trended.dispersion)
+```
+
+```{r}
+fit = glmQLFit(y, design, robust=TRUE) 
+summary(fit$var.post)
+```
+
+
+
+
+
+## 4. Differential peaks
+
+
+```{r}
+contrasts = list(gfp_uninf=c(1, 0,-1),
+                 gfp_red = c(1,-1,0),
+                 red_uninf=c(0,1,-1))
+
+diff.bins =  lapply(names(contrasts),function(n) {
+  glmQLFTest(fit, contrast=contrasts[[n]])
+})
+names(diff.bins) = names(contrasts)
+```
+
+How many significant bins?
+
+```{r}
+i.sig = lapply(diff.bins,function(x) {x$table$PValue<0.01})
+sapply(i.sig,sum)
+```
+
+```{r}
+sapply(1:3,function(i) {table(diff.bins[[i]]$table$logFC[i.sig[[i]]]>0)})
+```
+
+
+Let's merge significant bins into larger windows:
+
+```{r}
+merged = mergeWindows(data.sub,tol=1000L)
+summary(width(merged$regions))
+```
+
+```{r}
+tabcom = lapply(diff.bins,function(x) {combineTests(merged$ids,x$table)})
+is.sig.region = lapply(tabcom,function(x) {x$FDR <= 0.1})
+sapply(is.sig.region,sum)
+```
+
+
+What direction?
+
+```{r}
+sapply(1:3,function(i) {
+  x = tabcom[[i]][is.sig.region[[i]],]
+  table(x$rep.logFC>0)
+})
+```
+
+
+
+
+```{r}
+diff.win = merged$regions
+diff.win = lapply(tabcom,function(x) {y=diff.win;mcols(y) = x;return(y)})
+```
+
+Annotated the differential regions to genes:
+
+```{r}
+library(ChIPseeker)
+library(org.Hs.eg.db)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+txdb = TxDb.Hsapiens.UCSC.hg38.knownGene
+```
+
+
+```{r, error=FALSE}
+diff.win.anno = lapply(diff.win,function(x) 
+  {y = annotatePeak(x,
+  tssRegion=c(-3000, 3000),
+  TxDb=txdb, annoDb="org.Hs.eg.db")
+  as.GRanges(y)
+  })
+diff.win.anno = lapply(diff.win.anno,function(x) {x[order(x$FDR)]})
+```
+
+Export these tables:
+
+```{r}
+lapply(names(diff.win.anno),function(n) {
+  x = as.data.frame(diff.win.anno[[n]][diff.win.anno[[n]]$FDR<0.1])
+  write.table(x,quote=FALSE,sep='\t',
+              file=file.path(out.dir,paste0(Sys.Date(),'_selectedReplicates_',n,'.tsv')))
+  dim(x)
+})
+```
+
+Now produce the volcano plots:
+
+```{r}
+library(ggrepel)
+##
+fdr.thres = 0.1
+nshowlab = 10
+lapply(1:3,function(i){
+  XX = diff.win.anno[[i]]
+  XX = XX[XX$FDR<0.5]
+  ## prepare the labels
+  lab = rep(NA,length(XX))
+  i.pos = which(XX$FDR<fdr.thres & XX$rep.logFC>0)
+  i.neg = which(XX$FDR<fdr.thres & XX$rep.logFC<0)
+  if (length(i.pos)>0) {lab[i.pos[1:min(nshowlab,length(i.pos))]] = XX$SYMBOL[i.pos[1:min(nshowlab,length(i.pos))]]}
+  if (length(i.neg)>0) {lab[i.neg[1:min(nshowlab,length(i.neg))]] = XX$SYMBOL[i.neg[1:min(nshowlab,length(i.neg))]]}
+  lab[grep('LOC',lab)] = NA
+  p = ggplot(as.data.frame(XX),aes(x=rep.logFC,y=-log10(FDR))) + geom_point(aes(color= FDR<fdr.thres)) 
+  p = p +  scale_color_manual(values=c('grey','red')) + geom_text_repel(size=3,aes(rep.logFC, -log10(FDR), label = lab)) 
+  p = p + theme_bw() + xlab('log fold-change')
+  p = p + ggtitle(gsub('_',' vs. ',names(diff.win.anno)[i]))
+  p
+  ggsave(p,file=file.path(out.dir,paste0(Sys.Date(),'_selectedReplicates_',names(diff.win.anno)[i],'. volcano.pdf')))
+})
+```
