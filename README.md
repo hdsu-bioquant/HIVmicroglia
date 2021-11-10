@@ -3,6 +3,8 @@ Script related to the microglia HIV paper
 
 
 ## Explanations
+- Figure1_SuppFig1.Rmd : All panels from Figure 1 and panels D-F in supplementary figure 1
+- Figure2_Supp2A-C.Rmd : Panels A-C from Figures 2 and Supplementary 2 
 
 ### ATAC-seq processing
 
