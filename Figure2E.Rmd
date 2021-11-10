@@ -1,0 +1,290 @@
+---
+title: "Figure 2E"
+author: "Ana Luisa"
+date: "10/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This RMarkdown will reproduce the panel E in Figure 2 (IS vs ChromHMM-defined states) for HIV microglia analysis. 
+
+
+##### Import packages
+```{r, message=F}
+library(GenomicRanges)
+library(dplyr)
+## for plots:
+library(ggplot2)
+library(ComplexHeatmap)
+## for genes
+library(EnsDb.Hsapiens.v86)
+```
+  
+Paths  
+```{r}
+chrm_path="data/chromHMM"
+
+phantoms=load('data/phantomIS_sets_matchTSSdist_hg38.RData')
+ISpath="data/complete_WT-IScombined_hg38_annotated2021-05-24.rds"
+
+Mglia_sets <- list(IS = GRanges(readRDS(ISpath)), 
+                   P = phantom_set_mglia[[1]])
+
+# Import ChromHMM emission
+emission <- as.matrix(read.delim(paste0(chrm_path, "/emissions_10.txt")))
+row.names(emission) <- emission[,1]
+emission <- emission[,-1]
+```
+
+```{r emissions, fig.width=5, fig.height=3.7}
+col_fun = circlize::colorRamp2(c(0, 1), c("white", "#2E0F4F"))
+
+rownames(emission) <- gsub("8", "H3K27ac/H3K9me2-enriched",
+                           gsub("1", "Heterochromatin",
+                           gsub("2", "Quiescent",
+                                gsub("3", "Polycomb low",
+                                     gsub("4", "Polycomb high",
+                                          gsub("5", "Bivalent TSS",
+                                               gsub("6", "Enhancer (weak)",
+                                                    gsub("7", "Active TSS", 
+                                                         gsub("9", "Genic enhancer", 
+                                                              gsub("10", "Strong transcription",
+                                                                        rownames(emission)))))))))))
+
+h=Heatmap(emission, col = col_fun, name = "Emission", row_title = "States",
+        row_order = order(as.numeric(gsub("row", "", row.names(emission)))),
+        rect_gp = gpar(col = "white", lwd = 2), 
+        heatmap_legend_param = list(legend_height = unit(4, "cm"), 
+                                    title_position = "lefttop-rot"))
+draw(h, heatmap_legend_side = "left")
+
+```
+
+Produces a TSS enrichment heatmap (not present in the paper but used to call states)
+```{r foldchangeTSS, fig.width=8, fig.height=3.2}
+TSS <- as.matrix(read.delim(paste0(chrm_path, "/microglia_10_RefSeqTSS_neighborhood.txt")))
+row.names(TSS) <- TSS[,1]
+TSS <- TSS[,-1]
+col_fun_t = circlize::colorRamp2(c(0, 6, 12, 27), c("white", "#E3DAEC", "#2E0F4F", "black"))
+
+rownames(TSS) <- gsub("8", "H3K27ac/H3K9me2-enriched",
+                           gsub("1", "Heterochromatin",
+                           gsub("2", "Quiescent",
+                                gsub("3", "Polycomb low",
+                                     gsub("4", "Polycomb high",
+                                          gsub("5", "Bivalent TSS",
+                                               gsub("6", "Enhancer (weak)",
+                                                    gsub("7", "Active TSS", 
+                                                         gsub("9", "Genic enhancer", 
+                                                              gsub("10", "Strong transcription",
+                                                                        rownames(TSS)))))))))))
+
+
+h2=Heatmap(TSS, col = col_fun_t, name = "Fold enrichment", row_labels = row.names(TSS), 
+        column_title = "TSS",
+        rect_gp = gpar(col = "white", lwd = 2),
+        column_order = order(as.numeric(gsub("column", "", colnames(TSS)))),
+        row_order = order(as.numeric(gsub("row", "", row.names(TSS)))),
+        column_labels = gsub("X", "+", 
+                             gsub("X.", "-", colnames(TSS), fixed = T)), 
+        heatmap_legend_param = list(legend_height = unit(4, "cm"), 
+                                    title_position = "lefttop-rot"))
+draw(h2, heatmap_legend_side = "right")
+```
+
+
+```{r}
+chrmMdense <- read.delim(paste0(chrm_path,"/microglia_10_segments.bed"), header = F)
+# chrmMdense <- chrmMdense[chrmMdense$V4 != quiescent,]
+
+clip_by_state <- function(bedfile) {
+  stat <- unique(chrmMdense$V4)
+  tempbed <- chrmMdense %>% dplyr::filter(V2 < V3)
+  list_temp <- lapply(stat, function(x) tempbed[which(tempbed$V4 == x),])
+  gr <- lapply(list_temp, function(x)
+    makeGRangesFromDataFrame(x, seqnames.field="V1", start.field="V2", end.field="V3", keep.extra.columns = T, ))
+  names(gr) <- stat
+  gr
+}
+
+states_beds <- clip_by_state(chrmMdense)
+lapply(states_beds, function(x) sum(x@ranges@width))
+
+# overlaps_is <- lapply(states_beds, function(x) subsetByOverlaps(x, productiveGR.flex$`matchdiff-25`))
+overlaps_is <- lapply(Mglia_sets, function(x) 
+  lapply(states_beds, function(y) subsetByOverlaps(x, y, ignore.strand=T)))
+
+is_by_state <- lapply(names(overlaps_is), function(x) data.frame(Size=lengths(overlaps_is[[x]]),
+                                                          States=names(lengths(overlaps_is[[x]])),
+                                                          Cell=x))
+# is_by_state$States <- rownames(is_by_state)
+nregions_by_state <- data.frame(Size = unlist(lapply(states_beds, function(x) sum(x@ranges@width))))
+nregions_by_state$States <- rownames(nregions_by_state)
+nregions_by_state$Cell <- "All states"
+nregions_by_state$Sets <- "All states"
+
+plot_states_comp <- rbind(bind_rows(is_by_state, .id = "Sets"), nregions_by_state)
+
+plot_states_comp$States <- gsub("E8", "H3K27ac/H3K9me2-enriched",
+                           gsub("E1", "Heterochromatin",
+                           gsub("E2", "Quiescent",
+                                gsub("E3", "Polycomb low",
+                                     gsub("E4", "Polycomb high",
+                                          gsub("E5", "Bivalent TSS",
+                                               gsub("E6", "Enhancer (weak)",
+                                                    gsub("E7", "Active TSS",
+                                                         gsub("E9", "Genic enhancer",
+                                                              gsub("E10", "Strong transcription",
+                                                                        plot_states_comp$States))))))))))
+
+nb.cols <- 10
+mycolors <- colorRampPalette(RColorBrewer::brewer.pal(10, "PuBu"))(nb.cols)
+
+plot_states_comp$States <- factor(plot_states_comp$States,
+                                  levels = rownames(h2@matrix))
+# # ggplot(plot_states_comp, aes(y = Size, x = Cell, fill = States)) + 
+# #   geom_col(position = "fill", color = "black") + 
+# #   scale_y_continuous(labels = scales::percent) + 
+# #   scale_fill_manual(values=rev(mycolors)) +
+# #   theme_classic(base_size = 20) +
+# #   theme(axis.text.x = element_text(color = "black",
+# #                                    angle = 90, hjust = 1,
+# #                                    vjust = 0.5, size = 20),
+# #         axis.text.y = element_text(color = "black",
+# #                                    hjust = 1,
+# #                                    vjust = 0.5, size = 20))
+
+```
+
+### Chi-square test  
+```{r chisquareExpectedObserved, fig.height=5, fig.width=10}
+# Is there a significant difference between the locations in CD4+ T cell vs microglia? Chi-square test
+table_to_chi <- rbind(bind_rows(is_by_state, .id = "Sets"), nregions_by_state)
+table_to_chi <- table_to_chi[table_to_chi$Cell %in% c("All states", "IS"),] %>%
+  group_by(Cell) %>%
+  mutate(Proportion = Size/sum(Size))
+
+table_to_chi$States <- gsub("E8", "H3K27ac/H3K9me2-enriched",
+                           gsub("E1", "Heterochromatin",
+                           gsub("E2", "Quiescent",
+                                gsub("E3", "Polycomb low",
+                                     gsub("E4", "Polycomb high",
+                                          gsub("E5", "Bivalent TSS",
+                                               gsub("E6", "Enhancer (weak)",
+                                                    gsub("E7", "Active TSS", 
+                                                         gsub("E9", "Genic enhancer", 
+                                                              gsub("E10", "Strong transcription",
+                                                                        table_to_chi$States))))))))))
+
+
+pre.chisq <- reshape2::dcast(table_to_chi, Cell ~ States, value.var = "Size")
+rownames(pre.chisq) <- pre.chisq$Cell
+pre.chisq$Cell <- NULL
+
+
+
+# chi-square test
+expected <- table_to_chi[table_to_chi$Cell == "All states",]$Proportion
+names(expected) <- table_to_chi[table_to_chi$Cell == "All states",]$States
+expected <- expected[order(factor(names(expected), levels=colnames(pre.chisq)))]
+
+chitest <- chisq.test(t(pre.chisq[2,]), p=expected)
+chitest
+
+
+# plot the expected vs observed values
+bb=rbind(data.frame(States = rownames(t(pre.chisq[2,])),
+                    Counts=reshape2::melt(chitest[["observed"]]),
+                    Chi = "Observed"),
+         data.frame(States = names(expected),
+                    Counts=reshape2::melt(chitest[["expected"]]),
+                    Chi = "Expected"))
+# ggplot(bb, aes(x = States, y = value, fill = Chi)) +
+#     scale_fill_brewer(palette="PuBu") + theme_minimal() +
+#     theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+#     geom_bar(stat = "identity", position=position_dodge()) 
+
+
+for (i in 1:nrow(t(pre.chisq))) {
+  print("One-sided binomial test (greater)")
+  print(rownames(t(pre.chisq))[i])
+  print(binom.test(t(pre.chisq)[i,2], 
+                   sum(t(pre.chisq)[,2]), 
+                   p=t(pre.chisq)[i,1]/sum(t(pre.chisq)[,1]), alternative = "greater"))
+}
+
+
+for (i in 1:nrow(t(pre.chisq))) {
+  print("One-sided binomial test (less)")
+  print(rownames(t(pre.chisq))[i])
+  print(binom.test(t(pre.chisq)[i,2], 
+                   sum(t(pre.chisq)[,2]), 
+                   p=t(pre.chisq)[i,1]/sum(t(pre.chisq)[,1]), alternative = "less"))
+}
+```
+
+
+Create the final image with all the heatmaps into one wide and pretty one:
+```{r ChromHMMoverlap_fig, fig.height=5.3, fig.width=7.5}
+# edit the overlap object into something we can do an heatmap with
+states_overlp <- plot_states_comp %>% 
+  group_by(Cell) %>% 
+  summarise(Percentage = Size/sum(Size)*100,
+            States = States) 
+
+# sanity check for the percentage grouping calculation
+sum(states_overlp$Percentage) == 100*length(unique(states_overlp$Cell))
+
+# transform into a wider instead of longer matrix to plot the heatmap
+heat_states_overlp <- as.matrix(tidyr::pivot_wider(states_overlp,
+                                                   names_from = "Cell", values_from = "Percentage"))
+
+# just replacing P set to RMC
+colnames(heat_states_overlp) = gsub("P", "RMC", 
+                                    colnames(heat_states_overlp))
+
+rownames(heat_states_overlp) = heat_states_overlp[,1]
+heat_states_overlp = heat_states_overlp[,-1]
+
+
+class(heat_states_overlp) <- 'numeric'
+# generate the heatmap for the overlap
+col_fun_percent = circlize::colorRamp2(c(0, 65), c("white", "#2980B9"))
+
+## regen of the heatmap for the emission
+emission_heat = Heatmap(emission, col = col_fun, name = "Emission", row_title = "States",
+                       rect_gp = gpar(col = "white", lwd = 2.5), 
+                       cluster_rows = F, row_dend_reorder = F,
+                       #border = T,
+                       heatmap_legend_param = list(legend_height = unit(4, "cm"), 
+                                                   title_position = "lefttop-rot"))
+# re-order
+heat_states_overlp <- heat_states_overlp[match(emission_heat@row_names_param[["labels"]], rownames(heat_states_overlp)),]
+
+heat_overlap = Heatmap(heat_states_overlp, col = col_fun_percent, 
+                       name = "Overlap (%)", row_title = "States",
+                       cluster_rows = F, row_dend_reorder = F,
+                       column_dend_reorder = F, cluster_columns = F,
+                       #border = T,
+                       rect_gp = gpar(col = "white", lwd = 2.5), 
+                       cell_fun = function(j, i, x, y, width, height, fill) {
+                         grid.text(sprintf("%.1f", heat_states_overlp[i, j]), x, y, gp = gpar(fontsize = 11))
+                         },
+                       heatmap_legend_param = list(legend_height = unit(4, "cm"), 
+                                                   title_position = "lefttop-rot"))
+
+# generate the ChromHMM complete figure
+ChromHMM_fig = emission_heat + heat_overlap
+
+# emission_heat
+# heat_overlap
+draw(ChromHMM_fig, ht_gap = unit(0, "cm"))
+```
+
+
+```{r}
+sessionInfo()
+```
