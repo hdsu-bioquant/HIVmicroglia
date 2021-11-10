@@ -1,0 +1,202 @@
+---
+title: "Figure 2 (panel D)"
+author: "Ana Luisa"
+date: "10/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This RMarkdown will reproduce the panel D in Figure 2 (IS vs RMC) for HIV microglia analysis. 
+Production of the profile plots is a bit time and memory consuming, so prepare yourself. 
+
+##### Import packages
+```{r, message=F}
+library(GenomicRanges)
+library(dplyr)
+## for bigwigs:
+library(soGGi)
+## for plots:
+library(ggplot2)
+## for genes
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+```
+
+##### Import data  
+Paths
+```{r}
+hauntedAnalysis=T # if true, will use the phantom sets 
+
+getwd()
+# IS
+ISpath="data/complete_WT-IScombined_hg38_annotated2021-05-24.rds"
+
+# You will need the merged bigwigs for all the histone marks and atac-seq
+H3K27ac.peaks.location1="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_lusic/pipeline_run_PE/Mglia/mock/H3K27ac/bw/Mglia_mock_H3K27ac_RPKM_None_subtract.bw"
+H3K27ac.peaks.location2="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_lusic/pipeline_run_SE_H3K27ac/mglia/mock/H3K27ac/bw/mglia_mock_H3K27ac_RPKM_None_subtract.bw"
+H3K9me2.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_lusic/pipeline_run_PE/Mglia/mock/H3K9me2/bw/Mglia_mock_H3K9me2_RPKM_None_subtract.bw"
+H3K9me3.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_17-02-21/mglia/uninf/H3K9me3/bw/mglia_uninf_H3K9me3_RPKM_None_subtract.bw"
+H3K27me3.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_12-10-20/mglia/uninf/H3K27me3/bw/mglia_uninf_H3K27me3_RPKM_None_subtract.bw"
+H3K36me3.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_12-10-20/mglia/uninf/H3K36me3/bw/mglia_uninf_H3K36me3_RPKM_None_subtract.bw"
+H3K4me1.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_17-02-21/mglia/uninf/H3K4me1/bw/mglia_uninf_H3K4me1_RPKM_None_subtract.bw"
+
+# Import the RMC
+if (hauntedAnalysis==T) {
+  phantoms=load('data/phantomIS_sets_matchTSSdist_hg38.RData')
+}
+```
+  
+Import the IS set from microglia 
+```{r}
+## IS ranges
+IS_ranges <- GRanges(readRDS(ISpath))
+how_long = 10000 # how long should the interval of the vicinity of the IS be
+```
+
+Use the soGGi function region plot to create the base object of big wig over selected ranges (in this case, IS +/- x)
+```{r, message=F}
+#genes = ChIPpeakAnno::annoGR(EnsDb.Hsapiens.v86, feature = "gene") ## the original but not working
+genes = ChIPpeakAnno::annoGR(TxDb.Hsapiens.UCSC.hg38.knownGene)
+genes = genes[seqnames(genes) %in% c(paste0("chr", 1:22), "chrX", "chrY")]
+
+# divide and conquer the RMC
+if (hauntedAnalysis==T) {
+  Mglia_sets <- list(Microglia = IS_ranges, 
+                     PM = phantom_set_mglia[[1]])
+  Mglia_sets$PM$Location <- "Intergenic" 
+  Mglia_sets$PM[Mglia_sets$PM %in% subsetByOverlaps(Mglia_sets$PM, genes)]$Location <- "Genic" 
+  Mglia_sets$PM[Mglia_sets$PM %in% subsetByOverlaps(Mglia_sets$PM, 
+                                                    promoters(genes, upstream = 2000, downstream=0))]$Location <- "Genic" 
+  
+} else {
+  Mglia_sets <- list(IS = IS_ranges)
+}
+
+```
+
+
+```{r}
+# Active
+h3K27ac1 <- lapply(Mglia_sets, function(x) 
+  regionPlot(H3K27ac.peaks.location1, x, format="bigwig", distanceAround = how_long))
+h3K27ac2 <- lapply(Mglia_sets, function(x) 
+  regionPlot(H3K27ac.peaks.location2, x, format="bigwig", distanceAround = how_long))
+
+h3K36me3 <- lapply(Mglia_sets, function(x) 
+  regionPlot(H3K36me3.peaks.location, x, format="bigwig", distanceAround = how_long)) 
+h3K4me1 <- lapply(Mglia_sets, function(x) 
+  regionPlot(H3K4me1.peaks.location, x, format="bigwig", distanceAround = how_long)) 
+
+# Repressive
+h3K9me3 <- lapply(Mglia_sets, function(x) 
+  regionPlot(H3K9me3.peaks.location, x, format="bigwig", distanceAround = how_long)) 
+h3K27me3 <- lapply(Mglia_sets, function(x) 
+  regionPlot(H3K27me3.peaks.location, x, format="bigwig", distanceAround = how_long)) 
+h3K9me2 <- lapply(Mglia_sets, function(x) 
+  regionPlot(H3K9me2.peaks.location, x, format="bigwig", distanceAround = how_long)) 
+```
+
+
+```{r}
+plotRegion_remastered_forGroups_genicDivide <- function(ChIPprofileObjectList, range, convert0){
+  temp_d <- lapply(ChIPprofileObjectList, function(x) 
+    reshape2::melt(data.frame(x@assays@data@listData[[1]],
+                              locations = x@rowRanges@elementMetadata@listData[["Location"]])))
+  names(temp_d) <- names(ChIPprofileObjectList)
+  
+  if (convert0 == TRUE) {
+    temp_d <- lapply(temp_d, function(x) {
+      tt = x
+      tt$value[tt$value < 0] <- 0 
+      tt })
+  }
+  
+  summaries_list <- lapply(temp_d, function(x){
+    n = length(unique(x$variable))
+    summaries <- x %>% 
+      group_by(variable, locations, .add = T) %>% 
+      summarise(mean = mean(value, 
+                            na.rm=TRUE),
+                sd = sd(value, na.rm=TRUE),
+                lower_CI = mean(value, 
+                                na.rm=TRUE) - qt(.975,9)*sd(value, 
+                                                            na.rm=TRUE)/sqrt(n),
+                upper_CI = mean(value, 
+                                na.rm=TRUE) + qt(.975,9)*sd(value, 
+                                                            na.rm=TRUE)/sqrt(n))
+    summaries
+  })
+  
+  binded_summary <- bind_rows(summaries_list, 
+                              .id = "Group") 
+  
+  binded_summary$Set <- paste0(binded_summary$Group, ",",
+                               binded_summary$locations)
+  
+  classygrey = "black"
+  pal=c("#1A5276","#512E5F","#D4E6F1", "#D0CCDD")
+   ggplot(binded_summary, aes(x = variable, y = mean, 
+                              group = Set)) + 
+    geom_ribbon(aes(ymin = lower_CI, ymax = upper_CI, 
+                    fill=Set), alpha = 0.2) +
+    scale_fill_manual(values = pal) +
+    scale_color_manual(values = pal) +
+    expand_limits(y = 0) +
+    geom_line(aes(group = Set, color = Set)) +
+    scale_x_discrete(breaks = c("Point_Centre", 
+                                paste0("Point_Centre-", range), 
+                                paste0("Point_Centre", range)),
+                     labels=c("IS", paste0("-", range), 
+                              paste0("+", range))) +
+    labs(x = "", y = "RPKM") +
+    theme_classic(base_size = 20) +
+    geom_vline(xintercept = "Point_Centre", 
+               linetype="dotted", 
+               color = classygrey) +
+    theme(plot.margin=unit(c(0.2,1,0.2,0.5),"cm"), 
+          axis.title = element_text(colour = classygrey), 
+          axis.line = element_line(colour = classygrey), 
+          axis.text = element_text(colour = classygrey), 
+          legend.position = "right",
+          panel.border = element_rect(colour = "black", 
+                                      fill=NA, size=2))
+}
+
+```
+  
+  
+```{r ChIP, fig.width=10, fig.height=5, message=F}
+plotRegion_remastered_forGroups_genicDivide(h3K9me2, how_long, convert0 = TRUE) + 
+    ggtitle(paste0("H3K9me2 on the +/-" , how_long, "bp around the IS"))
+  
+plotRegion_remastered_forGroups_genicDivide(h3K9me3, how_long, convert0 = TRUE) + 
+    ggtitle(paste0("H3K9me3 on the +/-" , how_long, "bp around the IS"))
+  
+plotRegion_remastered_forGroups_genicDivide(h3K27me3, how_long, convert0 = TRUE) + 
+    ggtitle(paste0("H3K27me3 on the +/-" , how_long, "bp around the IS"))
+  
+  ### ----------------
+  
+plotRegion_remastered_forGroups_genicDivide(list(Microglia=rbind(h3K27ac1$Microglia, h3K27ac2$Microglia),
+                                                 PM=rbind(h3K27ac1$PM, h3K27ac2$PM)), how_long, convert0 = TRUE) + 
+    ggtitle(paste("H3K27ac on the +/-" , how_long, "bp around the IS"))
+  # plotRegion_remastered(h3K27ac1, how_long, convert0 = TRUE) + ggtitle(paste("H3K27ac on the +/-" , how_long, "bp around the IS"))
+  # plotRegion_remastered(h3K27ac2, how_long, convert0 = TRUE) + ggtitle(paste("H3K27ac on the +/-" , how_long, "bp around the IS"))
+  
+plotRegion_remastered_forGroups_genicDivide(h3K4me1, how_long, convert0 = TRUE) + 
+    ggtitle(paste0("H3K4me1 on the +/-" , how_long, "bp around the IS"))
+  
+plotRegion_remastered_forGroups_genicDivide(h3K36me3, how_long, convert0 = TRUE) + 
+    ggtitle(paste0("H3K36me3 on the +/-" , how_long, "bp around the IS"))
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+
