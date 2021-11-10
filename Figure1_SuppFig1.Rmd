@@ -1,0 +1,404 @@
+---
+title: "Figure 1 and Supp Figure 1"
+author: "Ana Luisa"
+date: "10/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+This RMarkdown will reproduce the figures 1 and supplementary figure 1 for HIV microglia analysis. 
+
+##### Import packages
+```{r, message=F}
+library(GenomicRanges)
+library(dplyr)
+## for annotation and GO enrichment:
+library(ChIPpeakAnno)
+library(EnsDb.Hsapiens.v86)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+#library(ChIPseeker)
+#library(biomaRt)
+## for plots:
+library(ggplot2)
+```
+  
+  
+##### Import data  
+Paths
+```{r}
+getwd()
+# IS
+mglia_path="data/complete_WT-IScombined_hg38_annotated2021-05-24.rds"
+cd4_path="data/complete_output_IS_CD4_hg38_annotated.rds"
+mdm_path="data/IS_MDM_hg38_GRanges.rds"
+# expression ratios
+global_ratios_cd4="data/global_expression_cd4.rds"
+global_ratios_mglia="data/global_expression_microglia.rds"
+```
+  
+```{r}
+# Import all
+IS <- list("CD4+ T cell" = GRanges(readRDS(cd4_path)),
+           "MDM" = readRDS(mdm_path),
+           "Microglia" = GRanges(readRDS(mglia_path)))
+global_ratiosMG <- readRDS(global_ratios_mglia)
+global_ratiosCD4 <- readRDS(global_ratios_cd4)
+
+IS <- lapply(IS, function(x) {
+  strand(x) <- "*"
+  x}) 
+```
+
+
+# Figure 1  
+
+Chromosome distribution
+```{r chromoFrequency, fig.width=12, fig.height=5}
+IS_df = lapply(IS, function(x){
+  as.data.frame(x) %>% 
+  dplyr::select(seqnames, start, end)
+}) 
+
+seq_by_chr = rbind(data.frame(IS=summary(factor(IS_df$Microglia$seqnames)),
+                              Chr=names(summary(factor(IS_df$Microglia$seqnames))),
+                              TotalIS=nrow(IS_df$Microglia),
+                              Cell = "Microglia"),
+                   data.frame(IS=summary(factor(IS_df$`CD4+ T cell`$seqnames)),
+                              TotalIS=nrow(IS_df$`CD4+ T cell`),
+                              Chr=names(summary(factor(IS_df$`CD4+ T cell`$seqnames))),
+                              Cell = "CD4+ T cell"),
+                   data.frame(IS=summary(factor(IS_df$MDM$seqnames)),
+                              TotalIS=nrow(IS_df$MDM),
+                              Chr=names(summary(factor(IS_df$MDM$seqnames))),
+                              Cell = "MDM"))
+
+chrlen=data.frame(Length=seqlengths(TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene)[1:24],
+                  Chr=names(seqlengths(TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene)[1:24]))
+
+seq_by_chr = dplyr::left_join(seq_by_chr, chrlen)
+
+seq_by_chr$Chr<-gsub("chr", "", seq_by_chr$Chr)
+chrOrder<-c(1:22,"X","Y")
+seq_by_chr$Chr<-factor(seq_by_chr$Chr, levels=chrOrder)
+ 
+# calculate density as (number of IS per chr/total IS)/chr length
+seq_by_chr$Density <- (seq_by_chr$IS/seq_by_chr$TotalIS)/seq_by_chr$Length
+
+
+ggplot(seq_by_chr, aes(x = Chr, y = Density, fill=Cell)) + 
+  scale_fill_manual(values=c("#1F618D", "#dff7ee","#D9CEE5")) +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1.1, hjust = 1.1)) +
+  geom_bar(stat = "identity", position=position_dodge(), color = "black", alpha=0.5) +
+  labs(y = "Integration density", x = "Chromosome")
+
+```
+
+
+IS locations by cell type
+```{r barplot_celltypes,fig.width=13, fig.height=4}
+IS <- lapply(IS, function(x) {
+  strand(x) <- "*"
+  x})
+
+mart <- biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL",
+                         dataset = "hsapiens_gene_ensembl",
+                         host = "http://www.ensembl.org")
+
+# Get the annotation file from mart
+txdb = makeTxDbFromEnsembl(organism="Homo sapiens", release = 86)
+
+annotation = lapply(IS, function(x){
+  # renannotate the IS 
+    seqlevels(x) <- gsub("chr", "", seqlevels(x))
+    ChIPseeker::annotatePeak(x, tssRegion=c(-2000, 2000), 
+                           TxDb = txdb, annoDb="org.Hs.eg.db")
+  })
+
+get_the_locationratio_plot <- function(IS_list){
+  reannoPeaks = annotation
+  plot=ChIPseeker::plotAnnoBar(reannoPeaks)
+  # print(plot)
+  
+  df_plot=plot$data[,c(1:3)]
+  # print(plot$data)
+  # print(head(reannoPeaks))
+  
+  df_plot$Feature <- as.character(df_plot$Feature)
+  # collapse some of the annot names
+  df_plot$Feature <- gsub("Promoter .*", 
+                          "Promoter", 
+                          df_plot$Feature)
+  df_plot$Feature <- gsub(".* Intron", 
+                          "Intron", 
+                          df_plot$Feature)
+  df_plot$Feature <- gsub(".* Exon", 
+                          "Exon", 
+                          df_plot$Feature)
+  # summaries
+  df_plot_col=df_plot %>% 
+    group_by(`.id`, Feature, .add = T) %>% 
+    summarise(Frequency2 = sum(Frequency))
+  print(df_plot_col)
+  
+  # quickly re-order the factors
+  df_plot_col$Feature <- gsub("Downstream .*", "Downstream", df_plot_col$Feature)
+  
+  print(factor(df_plot_col$Feature))
+
+  df_plot_col$Feature <- factor(df_plot_col$Feature,
+                            levels = c("Promoter", "3' UTR", "5' UTR",
+                                       "Exon", "Intron", "Downstream",
+                                       "Distal Intergenic"))
+  
+  # plot
+  print(ggplot(df_plot_col, aes(fill = Feature, y = `.id`, 
+                        x = Frequency2)) +
+    geom_bar(position = position_stack(reverse = T), 
+           stat="identity", color = "black") +
+    theme_minimal(base_size = 20) +
+    theme(axis.text.y = element_text(size =24)) +
+    scale_fill_brewer(palette = "PuBu", direction = -1) +
+    theme(legend.position = "right") +
+    labs(x = "Frequency (%)", fill = "Location", y="Cell"))
+  
+  df_plot_col
+}
+ 
+aCRegion <- get_the_locationratio_plot(IS)
+```
+
+Venn on the IS genes (genic)
+```{r vennallGenic, fig.height=7, fig.width=7}
+annoData <- ChIPpeakAnno::annoGR(TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene)
+#annoData <- ChIPpeakAnno::annoGR(EnsDb.Hsapiens.v86) # the original, but not working anymore
+
+annotation <- lapply(IS, function(x) 
+  annotatePeakInBatch(x, AnnotationData = annoData, 
+                      output="shortestDistance",
+                      select = 'first', ignore.strand = F))
+
+IS_genes_genic <- lapply(annotation, function(x) {
+  annot_df = as.data.frame(x)
+  unique(annot_df[annot_df$insideFeature == "inside",]$feature)
+})
+
+ggvenn::ggvenn(IS_genes_genic, 
+  fill_color = c("#1F618D", "#dff7ee", "#D9CEE5"),
+  stroke_size = 0.5, set_name_size = 7, text_size=5)
+
+lengths(IS_genes_genic)
+
+
+jaccard <- function(a, b) {
+    intersection = length(intersect(a, b))
+    union = length(a) + length(b) - intersection
+    return (intersection/union)
+}
+
+jaccard(IS_genes_genic$`CD4+ T cell`, IS_genes_genic$Microglia)
+jaccard(IS_genes_genic$MDM, IS_genes_genic$Microglia)
+jaccard(IS_genes_genic$`CD4+ T cell`, IS_genes_genic$MDM)
+```
+
+Expression levels
+```{r ExpressionBar, fig.height=7, fig.width=7}
+IS_wExp <- lapply(IS[names(IS) != "MDM"], function(x) {
+  x$Expression <- gsub("high_exp", "High",
+                    gsub("mid_exp", "Medium", 
+                         gsub("low_exp", "Low",
+                              gsub("no_exp", "None", 
+                                   x$Expression))))
+  
+  x$Expression <- factor(x$Expression,
+                          levels = c("High", "Medium", "Low", "None"))
+  x
+})
+
+
+# rename and sort the names of expression values
+# Microglia 
+global_ratiosMG$Expression <- gsub("high_exp", "High",
+                                 gsub("mid_exp", "Medium", 
+                                      gsub("low_exp", "Low",
+                                           gsub("no_exp", "None", 
+                                                global_ratiosMG$Expression))))
+
+global_ratiosMG$Expression <- factor(global_ratiosMG$Expression,
+                                   levels = c("High", "Medium", "Low", "None"))
+
+# Cd4 
+global_ratiosCD4$Expression <- gsub("high_exp", "High",
+                                 gsub("mid_exp", "Medium", 
+                                      gsub("low_exp", "Low",
+                                           gsub("no_exp", "None", 
+                                                global_ratiosCD4$Expression))))
+
+global_ratiosCD4$Expression <- factor(global_ratiosCD4$Expression,
+                                   levels = c("High", "Medium", "Low", "None"))
+
+## Only genic integrations:  
+# just plot the global gene expression and the gene expression in IS-genes
+IS_genes <- lapply(IS_wExp, function(x) 
+  as.data.frame(x) %>% dplyr::select(feature, insideFeature, Expression) %>% unique)
+
+IS_genes_levels_genic <- rbind(data.frame(Genes=summary(factor(global_ratiosMG$Expression)),
+                                    Levels=names(summary(factor(global_ratiosMG$Expression))),
+                                    Cell = "Global\n(Microglia)"),
+                               data.frame(Genes=summary(factor(
+                                 IS_genes$Microglia[!is.na(IS_genes$Microglia$Expression) & 
+                                                        IS_genes$Microglia$insideFeature == "inside",]$Expression)),
+                                 Levels=names(summary(factor(
+                                   IS_genes$Microglia[!is.na(IS_genes$Microglia$Expression) & 
+                                                  IS_genes$Microglia$insideFeature == "inside",]$Expression))),
+                                    Cell = "Microglia"),
+                               data.frame(Genes=summary(factor(global_ratiosCD4$Expression)),
+                                    Levels=names(summary(factor(global_ratiosCD4$Expression))),
+                                    Cell = "Global\n(CD4+ T cells)"),
+                               data.frame(Genes=summary(factor(
+                                 IS_genes$`CD4+ T cell`[!is.na(IS_genes$`CD4+ T cell`$Expression) & 
+                                                        IS_genes$`CD4+ T cell`$insideFeature == "inside",]$Expression)),
+                                 Levels=names(summary(factor(
+                                   IS_genes$`CD4+ T cell`[!is.na(IS_genes$`CD4+ T cell`$Expression) & 
+                                                        IS_genes$`CD4+ T cell`$insideFeature == "inside",]$Expression))),
+                                    Cell = "CD4+ T cell"))
+
+
+IS_genes_levels_genic$Levels <- factor(IS_genes_levels_genic$Levels, 
+                                       levels = c("High", "Medium", "Low", "None"))
+IS_genes_levels_genic$Cell <- factor(IS_genes_levels_genic$Cell, 
+                                     levels = c("Global\n(Microglia)", "Microglia", 
+                                                                "Global\n(CD4+ T cells)","CD4+ T cell"))
+
+ggplot(IS_genes_levels_genic, aes(x = Cell, y = Genes, fill = Levels)) + 
+  geom_col(position = "fill", color = "black") + 
+  scale_y_continuous(labels = scales::percent) + 
+  scale_fill_brewer(palette = "PuBu", direction = -1) +
+  theme_classic(base_size = 20) +
+  labs(fill = "Expression\nlevel", y = "Genes with genic integration (%)") +
+  theme(axis.text.x = element_text(color = "black",
+                                   angle = 90, hjust = 1,
+                                   vjust = 0.5, size = 20),
+        axis.text.y = element_text(color = "black",
+                                   hjust = 1,
+                                   vjust = 0.5, size = 20))
+
+```
+
+
+Genes targeted on microglia
+```{r dotplotMglia, fig.height=10, fig.width=7}
+extract_geneInfo <- function(ISdf, onlyGenic=T) {
+  if (onlyGenic!=T) {
+    set = ISdf
+  } else {
+    set = ISdf[ISdf$Location == "Genic",]
+  }
+  
+  set$GeneLength<- abs(set$start_position - set$end_position)
+  
+  nIS = data.frame(nIS = summary(factor(set$hgnc_symbol), 
+                                 maxsum = nrow(set)),
+                    Symbol = names(summary(factor(set$hgnc_symbol), 
+                                           maxsum = nrow(set))))
+  subset=set %>% dplyr::select(feature, feature_strand, GeneLength,
+                        Expression, logMeanTPM, gene_biotype, hgnc_symbol)
+  
+  genes_merged=left_join(nIS, 
+                         subset, 
+                         by = c("Symbol" = "hgnc_symbol"))
+  unique(genes_merged)
+  
+}
+
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+genesIS<-list(Microglia=extract_geneInfo(as.data.frame(IS$Microglia)),
+              CD4=extract_geneInfo(as.data.frame(IS$`CD4+ T cell`)))
+
+# Select only CD4 and microglia
+ISgenes <- lapply(IS[names(IS) != "MDM"], function(x) {
+  x = as.data.frame(x)
+  expr_level = unique(x %>% dplyr::select(hgnc_symbol, Expression))
+  yy = x[x$Location =="Genic",]
+  
+  sums = data.frame(nIS = summary(factor(yy$hgnc_symbol), maxsum = nrow(yy)),
+                    Symbol = names(summary(factor(yy$hgnc_symbol), maxsum = nrow(yy))))
+  
+  genes_merged=left_join(sums, 
+                         expr_level, 
+                         by = c("Symbol" = "hgnc_symbol"))
+  
+  genes_ordered <- genes_merged[order(genes_merged$nIS, 
+                                      decreasing = T),]
+  print(genes_ordered[1:50,])
+  g = genes_ordered[genes_ordered$nIS >=5,]
+  g$Symbol <- factor(g$Symbol, levels = g$Symbol[order(g$nIS)])
+  
+  g
+})
+
+# Create the variable indicating if the gene is also targeted in CD4
+ISgenes$Microglia$AlsoCD4 <- "No"
+ISgenes$Microglia[ISgenes$Microglia$Symbol %in% ISgenes$`CD4+ T cell`$Symbol,]$AlsoCD4 <- "Yes"
+
+
+  ggplot(data=ISgenes$Microglia, aes(x=nIS, y=Symbol, 
+                                     fill = Expression, alpha = AlsoCD4)) + 
+    geom_dotplot(binaxis='y', stackdir='center', dotsize = 0.5) +
+    scale_fill_manual(values=c("#2980B9","#A9CCE3")) +
+    # scale_y_discrete(labels = MakeExp(ISgenes$Microglia$Symbol, ISgenes$`CD4+ T cell`$Symbol)) + 
+    labs(x = "Number of IS", fill = "Expression levels", 
+         alpha = "More than 5 integrations\n in CD4+ T cells", 
+         title = paste("Top genes targeted in microglia")) + 
+    theme_minimal(base_size = 16)
+  
+
+```
+
+
+# Supplementary Figure 1  
+
+Genes targeted on CD4+ T cells
+```{r dotplotCD4, fig.height=10, fig.width=7}
+  ggplot(data=ISgenes$`CD4+ T cell`[ISgenes$`CD4+ T cell`$nIS >= 12,], 
+         aes(x=nIS, y=Symbol, fill = Expression)) + 
+    geom_dotplot(binaxis='y', stackdir='center', alpha=0.5, dotsize = 0.5) +
+    scale_fill_manual(values=c("#1C2833", "#1A5276", "#2980B9", "#A9CCE3")) +
+    # theme(axis.text.y = element_text(colour = "green")) +
+    labs(x = "Number of IS", fill = "Expression levels", 
+         title = paste("Top genes targeted in CD4+ T cells")) + 
+    theme_minimal(base_size = 16)
+```
+
+
+BP gene ontology for microglia and CD4+ T cells
+```{r GO_BP, fig.width=9, fig.height=6}
+# GO Enrichment Analysis of the IS-gene set
+# Input as a vector of genes
+# function will return the enrichment GO categories after FDR control
+ego_BP <- lapply(genesIS, 
+              function(x) enrichGO(gene = x$feature, 
+                                   OrgDb = org.Hs.eg.db,
+                                   ont = "BP", keyType = "ENSEMBL",
+                                   pAdjustMethod = "fdr", 
+                                   pvalueCutoff  = 0.01,
+                                   qvalueCutoff  = 0.05,
+                                   readable = TRUE))
+
+dotplot(ego_BP$Microglia, showCategory=15) + 
+  ggtitle("GO Enrichment (BP) for \ngenes with integrations in microglia") + 
+  scale_colour_distiller(palette = "PuBu", direction = -1) + labs(color="FDR")
+dotplot(ego_BP$CD4, showCategory=15) + 
+  ggtitle("GO Enrichment (BP) for \ngenes with integrations in CD4+ T cells") + 
+  scale_colour_distiller(palette = "PuBu", direction = -1) + labs(color="FDR")
+```
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,448 @@
+---
+title: "Figures 2 and Supplementary 2 (panels a-c)"
+author: "Ana Luisa"
+date: "10/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This RMarkdown will reproduce the panels A-C in Figure 2 and SuppFig2 (metagene plots by expression level) for HIV microglia analysis. 
+Production of the profile plots is a bit time and memory consuming, so prepare yourself. 
+
+##### Import packages
+```{r, message=F}
+addTaskCallback(function(...) {set.seed(24);TRUE})
+library(GenomicRanges)
+library(dplyr)
+## for bigwigs:
+library(soGGi)
+## for plots:
+library(ggplot2)
+```
+
+##### Import data  
+Paths
+```{r}
+getwd()
+# IS
+ISpath="data/complete_WT-IScombined_hg38_annotated2021-05-24.rds"
+
+# You will need the merged bigwigs for all the histone marks and atac-seq
+H3K27ac.peaks.location1="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_lusic/pipeline_run_PE/Mglia/mock/H3K27ac/bw/Mglia_mock_H3K27ac_RPKM_None_subtract.bw"
+H3K27ac.peaks.location2="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_lusic/pipeline_run_SE_H3K27ac/mglia/mock/H3K27ac/bw/mglia_mock_H3K27ac_RPKM_None_subtract.bw"
+H3K9me2.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_lusic/pipeline_run_PE/Mglia/mock/H3K9me2/bw/Mglia_mock_H3K9me2_RPKM_None_subtract.bw"
+H3K9me3.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_17-02-21/mglia/uninf/H3K9me3/bw/mglia_uninf_H3K9me3_RPKM_None_subtract.bw"
+H3K27me3.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_12-10-20/mglia/uninf/H3K27me3/bw/mglia_uninf_H3K27me3_RPKM_None_subtract.bw"
+H3K36me3.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_12-10-20/mglia/uninf/H3K36me3/bw/mglia_uninf_H3K36me3_RPKM_None_subtract.bw"
+H3K4me1.peaks.location="/Volumes/ag-cherrmann/projects/06_HIV_Microglia/data/chip/microglia_17-02-21/mglia/uninf/H3K4me1/bw/mglia_uninf_H3K4me1_RPKM_None_subtract.bw"
+
+# Genes by IS vs no IS
+genes="data/genes_wIS_WT_hg38_2021-05-24.bed"
+genesNOis="data/genes_withoutIS_WT_hg382021-05-24.bed"
+```
+  
+Import the IS set from microglia and CD4+ T cells (strand field will be very important!)
+```{r}
+## genes with IS on them
+bed_genesIS=read.delim(genes, 
+                       sep = '\t', 
+                       header = F)
+
+sets=summary(factor(bed_genesIS$V7))[2:5]
+
+geneLists <- lapply(names(sets), function(x) {
+  gene_by_lvl = bed_genesIS[bed_genesIS$V7 == x,]
+  gr = makeGRangesFromDataFrame(gene_by_lvl, seqnames = "V1",
+                                start.field = "V2", 
+                                end.field = "V3", 
+                                strand.field = "V4",
+                                keep.extra.columns = T)
+  gr
+})
+
+names(geneLists) <- names(sets)
+
+## genes with no IS on them
+bed_genesnoIS=read.delim(genesNOis, 
+                       sep = '\t', 
+                       header = F)
+
+geneListsNoIS <- lapply(names(sets), function(x) {
+  n=sets[x]
+  gene_by_lvl=bed_genesnoIS[bed_genesnoIS$V7 == x,]
+    # print(nrow(gene_by_lvl))
+  gr=makeGRangesFromDataFrame(gene_by_lvl, seqnames = "V1",
+                              start.field = "V2", 
+                              end.field = "V3", 
+                              strand.field = "V4",
+                              keep.extra.columns = T)
+  # print(length(gr))
+  sample(gr, size=n)
+})
+
+names(geneListsNoIS) <- names(sets)
+
+##
+lengths(geneLists)
+
+
+
+# Replace by better names
+names(geneLists) <- gsub("high_exp", "High expression", 
+                         gsub("mid_exp", "Mid expression",
+                              gsub("low_exp", "Low expression",
+                                   gsub("no_exp", "No expression", names(geneLists)))))
+
+names(geneListsNoIS) <- gsub("high_exp", "High expression", 
+                             gsub("mid_exp", "Mid expression",
+                                  gsub("low_exp", "Low expression",
+                                       gsub("no_exp", "No expression", names(geneListsNoIS)))))
+
+```
+
+
+Get the signal all over the genes  
+```{r, message=F, fig.width=15, fig.height=3}
+seqlengths = c(paste0("chr", c(1:22)), "chrX", "chrY")
+
+percentage_range = 10
+fenetres = 200
+
+# Active
+h3k27ac1.gL <- lapply(geneLists, function(x) regionPlot(H3K27ac.peaks.location1, x, format="bigwig", 
+                                                       distanceAround = percentage_range, 
+                                                       nOfWindows = fenetres, 
+                                                       style = "percentOfRegion"))
+h3k27ac2.gL <- lapply(geneLists, function(x) regionPlot(H3K27ac.peaks.location2, x, format="bigwig", 
+                                                       distanceAround = percentage_range, 
+                                                       nOfWindows = fenetres, 
+                                                       style = "percentOfRegion"))
+
+h3k4me1.gL <- lapply(geneLists, function(x) regionPlot(H3K4me1.peaks.location, x, format="bigwig", 
+                                                        distanceAround = percentage_range, 
+                                                        nOfWindows = fenetres, 
+                                                        style = "percentOfRegion"))
+
+h3k36me3.gL <- lapply(geneLists, function(x) regionPlot(H3K36me3.peaks.location, x, format="bigwig", 
+                                                        distanceAround = percentage_range, 
+                                                        nOfWindows = fenetres, 
+                                                        style = "percentOfRegion"))
+
+# Active (genes without IS)
+h3k27ac1.gL.noIS <- lapply(geneListsNoIS, function(x) regionPlot(H3K27ac.peaks.location1, x, format="bigwig", 
+                                                       distanceAround = percentage_range, 
+                                                       nOfWindows = fenetres, 
+                                                       style = "percentOfRegion"))
+h3k27ac2.gL.noIS <- lapply(geneListsNoIS, function(x) regionPlot(H3K27ac.peaks.location2, x, format="bigwig", 
+                                                       distanceAround = percentage_range, 
+                                                       nOfWindows = fenetres, 
+                                                       style = "percentOfRegion"))
+
+h3k4me1.gL.noIS <- lapply(geneListsNoIS, function(x) regionPlot(H3K4me1.peaks.location, x, format="bigwig", 
+                                                        distanceAround = percentage_range, 
+                                                        nOfWindows = fenetres, 
+                                                        style = "percentOfRegion"))
+
+h3k36me3.gL.noIS <- lapply(geneListsNoIS, function(x) regionPlot(H3K36me3.peaks.location, x, format="bigwig", 
+                                                        distanceAround = percentage_range, 
+                                                        nOfWindows = fenetres, 
+                                                        style = "percentOfRegion"))
+```
+
+
+```{r, message=F, fig.width=15, fig.height=3}
+# Repressive
+h3k27me3.gL <- lapply(geneLists, function(x) regionPlot(H3K27me3.peaks.location, x, format="bigwig", 
+                                                        distanceAround = percentage_range, 
+                                                        nOfWindows = fenetres, 
+                                                        style = "percentOfRegion"))
+
+h3k9me3.gL <- lapply(geneLists, function(x) regionPlot(H3K9me3.peaks.location, x, format="bigwig", 
+                                                       seqlengths = seqlengths, 
+                                                       distanceAround = percentage_range, 
+                                                       nOfWindows = fenetres, 
+                                                       style = "percentOfRegion"))
+
+h3k9me2.gL <- lapply(geneLists, function(x) regionPlot(H3K9me2.peaks.location, x, format="bigwig", 
+                                                       seqlengths = seqlengths, 
+                                                       distanceAround = percentage_range, 
+                                                       nOfWindows = fenetres, 
+                                                       style = "percentOfRegion"))
+
+
+# Chromatin accessibility
+atac.gL <- lapply(geneLists, function(x) regionPlot(atac_location, x, format="bigwig", 
+                                                    distanceAround = percentage_range, 
+                                                    nOfWindows = fenetres, 
+                                                    style = "percentOfRegion"))
+
+
+# Repressive (Genes wo IS)
+h3k27me3.gL.noIS <- lapply(geneListsNoIS, function(x) regionPlot(H3K27me3.peaks.location, x, format="bigwig", 
+                                                        distanceAround = percentage_range, 
+                                                        nOfWindows = fenetres, 
+                                                        style = "percentOfRegion"))
+
+h3k9me3.gL.noIS <- lapply(geneListsNoIS, function(x) regionPlot(H3K9me3.peaks.location, x, format="bigwig", 
+                                                       seqlengths = seqlengths, 
+                                                       distanceAround = percentage_range, 
+                                                       nOfWindows = fenetres, 
+                                                       style = "percentOfRegion"))
+
+h3k9me2.gL.noIS <- lapply(geneListsNoIS, function(x) regionPlot(H3K9me2.peaks.location, x, format="bigwig", 
+                                                       seqlengths = seqlengths, 
+                                                       distanceAround = percentage_range, 
+                                                       nOfWindows = fenetres, 
+                                                       style = "percentOfRegion"))
+
+
+# Chromatin accessibility
+atac.gL.noIS <- lapply(geneListsNoIS, function(x) regionPlot(atac_location, x, format="bigwig", 
+                                                    distanceAround = percentage_range, 
+                                                    nOfWindows = fenetres, 
+                                                    style = "percentOfRegion"))
+
+```
+  
+
+```{r}
+plotRegion_remastered_byGeneLevel <- function(ChIPprofileObjectList, percentage_range, bins, convert0){
+  # objects_selected = ChIPprofileObjectList[names(ChIPprofileObjectList) %in% list_with_setNames]
+  temp_d <- lapply(ChIPprofileObjectList, function(x) reshape2::melt(as.data.frame(x@assays@data@listData[[1]])))
+  if (convert0 == TRUE) {
+    temp_d <- lapply(temp_d, function(x) {
+      tt = x
+      tt$value[tt$value < 0] <- 0 
+      tt })
+  }
+  
+  names(temp_d) <- names(ChIPprofileObjectList)
+  
+  summaries_list <- lapply(temp_d, function(x){
+    n = length(unique(x$variable))
+    summaries <- x %>% group_by(variable) %>% 
+      summarise(mean = mean(value, na.rm=TRUE),
+                sd = sd(value, na.rm=TRUE),
+                lower_CI = mean(value, na.rm=TRUE) - qt(.975,9)*sd(value, na.rm=TRUE)/sqrt(n),
+                upper_CI = mean(value, na.rm=TRUE) + qt(.975,9)*sd(value, na.rm=TRUE)/sqrt(n))
+    summaries
+  })
+  
+  binded_summary <- bind_rows(summaries_list, .id = "geneList") 
+  binded_summary$geneList <- gsub("wIS", "IS",
+                                  gsub("woIS", "no IS", binded_summary$geneList))
+  
+  classygrey = "black"
+  range = bins/percentage_range
+  ggplot(binded_summary, aes(x = variable, y = mean, group = geneList)) + 
+    geom_ribbon(aes(ymin = lower_CI, 
+                    ymax = upper_CI, 
+                    fill=geneList), alpha = 0.2) +
+    expand_limits(y = 0) +
+    #scale_fill_brewer(palette = "Set2", name="Expression\nlevel") +
+    #scale_color_brewer(palette = "Set2", name="Expression\nlevel") +
+    scale_fill_manual(values = c("#1C2833", "#2980B9"), name="Gene group") +
+    scale_color_manual(values = c("#1C2833", "#2980B9"), name="Gene group") +
+    geom_line(aes(group = geneList, color = geneList)) +
+    scale_x_discrete(breaks = c("Start-1", "Start+1", "End+1", paste0("End+", range)),
+                     labels=c(paste0("TSS-", range, "%"), "TSS", "TES", paste0("TES+", range, "%"))) +
+    labs(x = "", y = "RPKM") +
+    geom_vline(xintercept = c("Start+1", "End+1"), linetype="dotted", color = classygrey) +
+    theme_classic(base_size = 18) +
+    theme(plot.margin=unit(c(0.2,1,0.2,0.5),"cm"), 
+          axis.title = element_text(colour = classygrey), 
+          axis.line = element_line(colour = classygrey),
+          axis.text = element_text(colour = classygrey), 
+          panel.border = element_rect(colour = "black", fill=NA, size=1.5)) 
+
+}
+```
+  
+  
+H3K9me2  
+```{r H3K9me2_byGL, message=F, fig.width=15, fig.height=3}
+lapply(names(h3k9me2.gL), function(x) 
+  plotRegion_remastered_byGeneLevel(list(wIS=h3k9me2.gL[[x]],
+                                         woIS=h3k9me2.gL.noIS[[x]]), 
+                                    percentage_range, 
+                                    fenetres, convert0 = TRUE) + ggtitle(x))
+```
+  
+  
+H3K27me3  
+```{r H3K27me3_byGL, message=F, fig.width=15, fig.height=3}
+lapply(names(h3k27me3.gL), function(x) 
+  plotRegion_remastered_byGeneLevel(list(wIS=h3k27me3.gL[[x]],
+                                         woIS=h3k27me3.gL.noIS[[x]]), 
+                                    percentage_range, 
+                                    fenetres, convert0 = TRUE) + ggtitle(x))
+```
+  
+  
+H3K9me3  
+```{r H3K9me3_byGL, message=F, fig.width=15, fig.height=3}
+lapply(names(h3k9me3.gL), function(x) 
+  plotRegion_remastered_byGeneLevel(list(wIS=h3k9me3.gL[[x]],
+                                         woIS=h3k9me3.gL.noIS[[x]]),
+                                    percentage_range,
+                                    fenetres, convert0 = TRUE) + ggtitle(x))
+```
+  
+***  
+  
+H3K36me3  
+```{r H3K36me3_byGL, message=F, fig.width=15, fig.height=3}
+lapply(names(h3k36me3.gL), function(x) 
+  plotRegion_remastered_byGeneLevel(list(wIS=h3k36me3.gL[[x]], 
+                                         woIS=h3k36me3.gL.noIS[[x]]),
+                                    percentage_range, 
+                                    fenetres, convert0 = TRUE) + ggtitle(x))
+```
+  
+  
+H3K4me1  
+```{r H3K4me1_byGL, message=F, fig.width=15, fig.height=3}
+lapply(names(h3k4me1.gL), function(x) 
+  plotRegion_remastered_byGeneLevel(list(wIS=h3k4me1.gL[[x]],
+                                         woIS=h3k4me1.gL.noIS[[x]]),
+                                    percentage_range, 
+                                    fenetres, convert0 = TRUE) + ggtitle(x))
+```
+  
+  
+H3K27ac  
+```{r H3K27ac_byGL, message=F, fig.width=15, fig.height=3}
+lapply(names(h3k27ac1.gL), function(x) 
+  plotRegion_remastered_byGeneLevel(list(wIS=rbind(h3k27ac1.gL[[x]], h3k27ac2.gL[[x]]),
+                                         woIS=rbind(h3k27ac1.gL.noIS[[x]], h3k27ac2.gL.noIS[[x]])),
+                                    percentage_range, 
+                                    fenetres, convert0 = TRUE) + ggtitle(x))
+```
+  
+  
+ATAC-seq  
+```{r ATAC_byGL, message=F, fig.width=15, fig.height=3}
+lapply(names(atac.gL), function(x) 
+  plotRegion_remastered_byGeneLevel(list(wIS=atac.gL[[x]], 
+                                         woIS=atac.gL.noIS[[x]]),
+                                    percentage_range, 
+                                    fenetres, convert0 = TRUE) + ggtitle(x))
+```
+    
+  
+  
+  
+  
+  
+  
+  
+To see more than one set in each plot:  
+```{r}
+plotRegion_remastered_forGroups <- function(ChIPprofileObjectList, percentage_range, bins, convert0){
+  # objects_selected = ChIPprofileObjectList[names(ChIPprofileObjectList) %in% list_with_setNames]
+  temp_d <- lapply(ChIPprofileObjectList, function(x) reshape2::melt(as.data.frame(x@assays@data@listData[[1]])))
+  if (convert0 == TRUE) {
+    temp_d <- lapply(temp_d, function(x) {
+      tt = x
+      tt$value[tt$value < 0] <- 0 
+      tt })
+  }
+  
+  names(temp_d) <- names(ChIPprofileObjectList)
+  
+  summaries_list <- lapply(temp_d, function(x){
+    n = length(unique(x$variable))
+    summaries <- x %>% group_by(variable) %>% 
+      summarise(mean = mean(value, na.rm=TRUE),
+                sd = sd(value, na.rm=TRUE),
+                lower_CI = mean(value, na.rm=TRUE) - qt(.975,9)*sd(value, na.rm=TRUE)/sqrt(n),
+                upper_CI = mean(value, na.rm=TRUE) + qt(.975,9)*sd(value, na.rm=TRUE)/sqrt(n))
+    summaries
+  })
+  
+  binded_summary <- bind_rows(summaries_list, .id = "geneList") 
+  binded_summary$geneList <- gsub("low_exp|Low expression", "Low", 
+                                  gsub("high_exp|High expression", "High",
+                                       gsub("mid_exp|Mid expression", "Mid", 
+                                            gsub("no_exp|No expression", "None", binded_summary$geneList))))
+  binded_summary$geneList <- factor(binded_summary$geneList, 
+                                       levels = c("High", "Mid", 
+                                                  "Low", "None"))
+  
+  classygrey = "black"
+  range = bins/percentage_range
+  ggplot(binded_summary, aes(x = variable, y = mean, group = geneList)) + 
+    geom_ribbon(aes(ymin = lower_CI, 
+                    ymax = upper_CI, 
+                    fill=geneList), alpha = 0.2) +
+    expand_limits(y = 0) +
+    #scale_fill_brewer(palette = "Set2", name="Expression\nlevel") +
+    #scale_color_brewer(palette = "Set2", name="Expression\nlevel") +
+    scale_fill_manual(values = c("#1C2833", "#1A5276", "#2980B9", "#A9CCE3"), name="Expression\nlevel") +
+    scale_color_manual(values = c("#1C2833", "#1A5276", "#2980B9", "#A9CCE3"), name="Expression\nlevel") +
+    geom_line(aes(group = geneList, color = geneList)) +
+    scale_x_discrete(breaks = c("Start-1", "Start+1", "End+1", paste0("End+", range)),
+                     labels=c(paste0("TSS-", range, "%"), "TSS", "TES", paste0("TES+", range, "%"))) +
+    labs(x = "", y = "RPKM") +
+    geom_vline(xintercept = c("Start+1", "End+1"), linetype="dotted", color = classygrey) +
+    theme_classic(base_size = 18) +
+    theme(plot.margin=unit(c(0.2,1,0.2,0.5),"cm"), 
+          axis.title = element_text(colour = classygrey), 
+          axis.line = element_line(colour = classygrey),
+          axis.text = element_text(colour = classygrey), 
+          panel.border = element_rect(colour = "black", fill=NA, size=1.5)) 
+
+}
+```
+  
+  
+Microglia gene sets by expression level (RNA-seq microglia)
+```{r genegroup_active, fig.width=12, fig.height=5, message=F}
+plotRegion_remastered_forGroups(list(high_exp = rbind(h3k27ac1.gL$`High expression`,h3k27ac2.gL$`High expression`),
+                                     low_exp = rbind(h3k27ac1.gL$`Low expression`,h3k27ac2.gL$`Low expression`),
+                                     mid_exp = rbind(h3k27ac1.gL$`Mid expression`,h3k27ac2.gL$`Mid expression`),
+                                     no_exp = rbind(h3k27ac1.gL$`No expression`,h3k27ac2.gL$`No expression`)), 
+                                percentage_range, 
+                                fenetres, convert0 = TRUE) + ggtitle("H3K27ac")
+
+plotRegion_remastered_forGroups(h3k36me3.gL, 
+                                percentage_range, 
+                                fenetres, convert0 = TRUE) + ggtitle("H3K36me3")
+
+plotRegion_remastered_forGroups(h3k4me1.gL, 
+                                percentage_range, 
+                                fenetres, convert0 = TRUE) + ggtitle("H3K4me1")
+```
+  
+  
+  
+```{r genegroup_repressive, fig.width=12, fig.height=5, message=F}
+plotRegion_remastered_forGroups(h3k27me3.gL, 
+                                percentage_range, 
+                                fenetres, convert0 = TRUE) + ggtitle("H3K27me3")
+
+plotRegion_remastered_forGroups(h3k9me2.gL, 
+                                percentage_range, 
+                                fenetres, convert0 = TRUE) + ggtitle("H3K9me2")
+
+plotRegion_remastered_forGroups(h3k9me3.gL, 
+                                percentage_range, 
+                                fenetres, convert0 = TRUE) + ggtitle("H3K9me3")
+```
+
+```{r genegroup_atac, fig.width=12, fig.height=5, message=F}
+plotRegion_remastered_forGroups(atac.gL, 
+                                percentage_range, fenetres, convert0 = TRUE) + ggtitle("ATAC-seq")
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+
