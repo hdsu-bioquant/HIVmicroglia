@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-This RMarkdown will reproduce the panel D in Figure 2 (IS vs RMC) for HIV microglia analysis. 
+This RMarkdown will reproduce the panel D in Supplementary Figure 2 (IS vs RMC on genic/intergenic) for HIV microglia analysis. 
 Production of the profile plots is a bit time and memory consuming, so prepare yourself. 
 
 ##### Import packages
