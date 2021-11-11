@@ -19,3 +19,7 @@ Script related to the microglia HIV paper
 
 - `2021-11-02_atacseq.Rmd` : Quality control / annotation of ATAC-seq peaks
 - `2021-11-04_diffATAC.Rmd` : Differential ATAC-seq analysis between 3 conditions
+
+### TF analysis
+- `Figure4.Rmd` : CTCF dynamics and footprinting (Fig 4D and Supp Fig 5C), along with heatmap on feature importance compared with TF binding by condition (panel 4E) 
+
