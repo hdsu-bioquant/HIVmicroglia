@@ -1,0 +1,145 @@
+---
+title: "IS, TAD boundaries, and H3K36me3 coexistence"
+author: "Ana Luisa"
+date: "11/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+```{r}
+library(GenomicRanges)
+library(dplyr)
+library(soGGi)
+library(ggplot2)
+library(EnrichedHeatmap)  
+```
+
+Paths
+```{r}
+ISpath="data/complete_WT-IScombined_hg38_annotated2021-05-24.rds"
+
+H3K36me3.broadpeaks.location="data/peaks/mglia_uninf_H3K36me3_peaks.broadPeak"
+```
+  
+  
+Importing the data...  
+```{r}
+IS_ranges <- GRanges(readRDS(ISpath))
+
+H3K36me3_broadPeaks = read.delim(file = H3K36me3.broadpeaks.location,
+                                 header = F) %>% 
+  filter(V5 >= 30) %>% 
+  makeGRangesFromDataFrame(seqnames.field = "V1",
+                           start.field = "V2", 
+                           end.field = "V3", 
+                           keep.extra.columns = T)
+  
+IS_ranges$isPeak = overlapsAny(IS_ranges+10000, H3K36me3_broadPeaks)
+
+```
+
+
+```{r}
+# Just using the set of TADs from 3D genome browser
+tad.files = list.files('data/hg38.TADs/',full.names = TRUE)
+tad.files = tad.files[grepl('Hippocampus',tad.files) | grepl('Cortex',tad.files) ]
+
+names  = gsub('_.*','',basename(tad.files))
+##
+tads.tmp = lapply(tad.files,read.table)
+names(tads.tmp) = names
+tads.tmp  = lapply(tads.tmp,function(x) {colnames(x) = c('chr','start','end');return(x)})
+##
+tads.brain = lapply(tads.tmp,function(x) {y = x[x$end>x$start,];makeGRangesFromDataFrame(y)})
+```
+
+
+Define the boundaries of the TADs:
+
+```{r}
+gbm = lapply(tads.brain,function(T) {
+  y= split(T,seqnames(T))
+  
+  gaps = suppressWarnings(do.call('c',lapply(1:length(y), function(i) {
+    yy = y[[i]]
+    chr = as.character(seqnames(yy))[-1]
+    tad.start = sort(start(yy))[-1]
+    tad.end = sort(end(yy))[-length(yy)]
+    ##
+    #mid = tad.end + floor((tad.start-tad.end)/2)
+    sort(GRanges(seqnames=chr,ranges=IRanges(start=tad.end,end=tad.start)))
+  })))
+  
+  
+  boundaries = suppressWarnings(do.call('c',lapply(1:length(y), function(i) {
+    yy = y[[i]]
+    chr = c(as.character(seqnames(yy)),as.character(seqnames(yy)))
+    boundary.start = sort(c(start(yy),end(yy)))
+    boundary.end = sort(c(start(yy),end(yy)))
+    ##
+    #mid = tad.end + floor((tad.start-tad.end)/2)
+    GRanges(seqnames=chr,ranges=IRanges(start=boundary.start,end=boundary.end))
+  })))
+  
+  mid = start(gaps) + floor((end(gaps)-start(gaps))/2)
+  midpoints = GRanges(seqnames = seqnames(gaps),ranges = IRanges(start=mid,end=mid))
+  return(list(gaps=gaps, boundaries=boundaries, midpoints = midpoints))
+})
+
+```
+  
+  
+```{r}
+is.cluster.by.distance = lapply(gbm, function(a){
+  dists = distanceToNearest(makeGRangesFromDataFrame(IS_ranges+10000, keep.extra.columns = T), 
+                            a$gaps)
+  IS_ranges$distanceTADboundary = NA
+  IS_ranges[dists@from,]$distanceTADboundary = dists@elementMetadata$distance
+  IS_ranges
+})
+```
+  
+  
+```{r boxplots, fig.height=8, fig.width=4.5}
+fancygrey = "#D8D8D8"
+
+lapply(names(is.cluster.by.distance), function(x){
+  set = as.data.frame(is.cluster.by.distance[[x]])
+  
+  # print(ggplot(set, aes(x = factor(cluster), y = log(distanceTADboundary+1))) +
+  #   geom_violin(fill = fancygrey, color = fancygrey) + 
+  #   geom_boxplot(width = 0.15, outlier.alpha = 0.2) +
+  #   theme_minimal(base_size = 20) +
+  #   ggpubr::stat_compare_means(size = 5.5) +
+  #   labs(y = "log(Distance)", 
+  #        x = "Cluster", 
+  #        subtitle = paste0("Distance to the nearest TAD \n(", x, ")")))
+  
+  print(ggplot(set, aes(x = factor(isPeak), y = log(distanceTADboundary+1))) +
+    geom_violin(fill = fancygrey, color = fancygrey) + 
+    geom_boxplot(width = 0.15, outlier.alpha = 0.2) +
+    theme_minimal(base_size = 20) +
+    ggpubr::stat_compare_means(size = 5.5) +
+    labs(y = "log(Distance in bp + 1)", 
+         x = "Overlaps peak", 
+         subtitle = paste0("Distance to the nearest TAD \nboundary (", x, ")")))
+  
+  ggplot(set, aes(x = factor(Location), y = log(distanceTADboundary+1))) +
+    geom_violin(fill = fancygrey, color = fancygrey) + 
+    geom_boxplot(width = 0.15, outlier.alpha = 0.2) +
+    theme_minimal(base_size = 20) +
+    ggpubr::stat_compare_means(size = 5.5) +
+    labs(y = "log(Distance in bp + 1)", 
+         x = "Location", 
+         subtitle = paste0("Distance to the nearest TAD \nboundary (", x, ")"))
+})
+```
+
+```{r}
+sessionInfo()
+```
+
