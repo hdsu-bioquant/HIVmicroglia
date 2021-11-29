@@ -20,14 +20,13 @@ Script related to the microglia HIV paper
 - `2021-11-02_atacseq.Rmd` : Quality control / annotation of ATAC-seq peaks
 - `2021-11-04_diffATAC.Rmd` : Differential ATAC-seq analysis between 3 conditions
 
-<<<<<<< HEAD
 
 ### TAD boundaries and H3K36me3/locations
 - `Figure5_S6_TADboundaryISViolins.Rmd` : reproduces the plots on the IS (partitioned) distance to the nearest TAD boundary
 To perform this, download the hg38 set of TADs from 3D Genome Browser and convert them to bed format.
 (http://3dgenome.fsm.northwestern.edu/downloads/hg38.TADs.zip) 
-=======
+
 ### TF analysis
 - `Figure4.Rmd` : CTCF dynamics and footprinting (Fig 4D and Supp Fig 5C), along with heatmap on feature importance compared with TF binding by condition (panel 4E) 
 
->>>>>>> 43a8c90c9b6ae76446db54a3408b50717ef7669f
+
