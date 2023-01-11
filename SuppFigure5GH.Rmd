@@ -1,0 +1,152 @@
+---
+title: "CTCF loss/gain upon CTCF-KD"
+author: "Ana"
+date: '2022-12-01'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(GenomicRanges)
+library(dplyr)
+library(ggplot2)
+library(ComplexHeatmap)
+```
+
+```{r}
+# Paths
+home_folder="/media/ag-cherrmann/projects/06_HIV_Microglia/data"
+
+# DiffBind results
+results_deseq2_path = paste0(home_folder, 
+                             "/chip/microglia_10-11-2022/mglia_correctAssig/diffBind_CTCFkd_CTCFwt_fulloutput_2022-12-01.rds")
+
+# TAD boundary regions
+tadb_path = paste0(home_folder, 
+                   "/tads/hg38/Boundary_3Dchromatin_NeuN.neg_TADs.50kb.bed")
+
+```
+
+```{r}
+# Load the DiffBind results
+diff_bind_res = data.frame(
+  readRDS(results_deseq2_path)
+)
+
+# TAD boundaries for the CTCF overlap 
+tadboundaries_50KB = rtracklayer::import.bed(tadb_path)
+
+# get just sig
+ctcf_changesig = diff_bind_res %>%
+  filter(FDR <= 0.05 & abs(Fold) >= 1) %>%
+  arrange(Fold) %>%
+  GRanges()
+
+hist(ctcf_changesig$Fold,
+     xlab = "Fold",
+     main = "Fold for CTCF (CTCF-KD vs CTCF-wt)")
+```
+
+Nicer CTCF volcano plot in the making
+```{r, fig.height=7, fig.width=8}
+as.data.frame(diff_bind_res) %>%
+  mutate(Significance = ifelse(FDR <= 0.05, "FDR<=0.05", "FDR>0.05")) %>%
+  ggplot(aes(x = Fold, 
+             y = -log10(FDR),
+             colour = Significance)) +
+  geom_point(size = .8) +
+  scale_colour_manual(values = c("#D35400", "#273746")) +
+  geom_vline(xintercept = 0, colour = "black", linewidth = 0.3) +
+  geom_hline(yintercept = -log10(0.05), colour = "darkgrey", 
+             linetype = "dashed", linewidth = 0.4) +
+  annotate(y = -log10(0.05), x = 4, label = "FDR=0.05", 
+           size = 5, geom="label", colour = "darkgrey") +
+  theme_bw(base_size = 20) +
+  theme(legend.position = "top") +
+  guides(colour = guide_legend(override.aes = list(size=4))) +
+  xlim(-4.5, 4.5)
+```
+
+```{r}
+# CTCF 
+ctcf_changeFDR = diff_bind_res %>%
+  filter(FDR <= 0.05) %>%
+  arrange(Fold) %>%
+  GRanges() 
+
+ctcf_changeFDR$TADb = overlapsAny(ctcf_changeFDR, 
+                                  tadboundaries_50KB)
+
+ctcf_changeFDR[ctcf_changeFDR$TADb == TRUE]$TADb <- "TADb"
+ctcf_changeFDR[ctcf_changeFDR$TADb == FALSE]$TADb <- "not-TADb"
+
+# 
+table(ctcf_changeFDR$TADb)
+CTCF_TADassoc = ctcf_changeFDR[ctcf_changeFDR$TADb == "TADb",]
+
+# Collapse CTCF change matrix into TAD boundary matrix
+overlap_TADb_CTCF = findOverlaps(tadboundaries_50KB, 
+                                 CTCF_TADassoc)
+
+# add a sort of index to both df to be able to bind them later
+CTCF_TADassoc$Index <- 0
+CTCF_TADassoc$Index[overlap_TADb_CTCF@to] <- overlap_TADb_CTCF@from
+tadboundaries_50KB$Index <- c(1:length(tadboundaries_50KB))
+    
+
+# now, we are calculating the avg
+# Just TAD boundaries associated to CTCF or where CTCF is changing
+df_ctcf_tadb <- as.data.frame(CTCF_TADassoc) %>% 
+  group_by(Index) %>% 
+  summarise(mean_fold = mean(Fold),
+            mean_FDR = mean(FDR), #?
+            mean_Conc_CTCFKD = mean(Conc_CTCFKD),
+            mean_Conc_wt = mean(Conc_wt)) %>% 
+  ungroup() %>%
+  left_join(as.data.frame(tadboundaries_50KB)) 
+  # and recovering the original coordinates
+
+  
+
+
+# Make a nice df for exporting
+df_ctcf_justtadb <- as.data.frame(CTCF_TADassoc) %>% 
+  group_by(Index) %>% 
+  summarise(mean_fold = mean(Fold),
+            std_fold = sd(Fold),
+            #mean_FDR = mean(FDR),
+            mean_Conc_CTCFKD = mean(Conc_CTCFKD),
+            mean_Conc_wt = mean(Conc_wt)) %>% 
+  ungroup() %>%
+  left_join(as.data.frame(tadboundaries_50KB), .) %>%
+  arrange(mean_fold) %>%
+  mutate(Change = ifelse(mean_fold < -1, "Down upon KD", 
+                         ifelse(mean_fold > 1, "Up upon KD", "Fold lower than abs(1)")))
+df_ctcf_justtadb[is.na(df_ctcf_justtadb$Change),]$Change = "No CTCF/No sig CTCF change" 
+
+# saveRDS(df_ctcf_justtadb,
+#         file = paste0("/media/ag-cherrmann/projects/06_HIV_Microglia/data/tads/hg38/NeuNnegTADboundaries50KB_by_CTCFchange_",
+#                       Sys.Date(), ".rds"))
+```
+
+```{r, fig.height=5, fig.width=6}
+rbind(
+  data.frame(Fold = ctcf_changeFDR[ctcf_changeFDR$TADb == "not-TADb"]$Fold, # exclude the ones that are overlapping the TAD boundaries
+             Group = "non-TAD boundary CTCF"),
+  data.frame(Fold = df_ctcf_justtadb$mean_fold,
+             Group = "TAD boundary")
+) %>%
+  na.omit() %>%
+  ggplot(aes(colour = Group, x = Fold)) +
+  stat_density(aes(colour = Group, x = Fold),
+               geom="line", position="identity", size = 1) + 
+  geom_vline(xintercept = 0) +
+  scale_colour_manual(values = c("grey", "#F4D03F")) +
+  theme_bw(base_size = 15) +
+  theme(legend.position = "top") +
+  labs(y = "Density", 
+       x = "CTCF fold change (CTCF-kd/CTCF-wt)")
+```
