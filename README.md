@@ -20,6 +20,10 @@ Script related to the microglia HIV paper
 - `2021-11-02_atacseq.Rmd` : Quality control / annotation of ATAC-seq peaks
 - `2021-11-04_diffATAC.Rmd` : Differential ATAC-seq analysis between 3 conditions
 
+### ChIP-seq downstream analysis
+- `28-11-2022_diffPeakAnalysis.R` : Differential ChIP-seq analysis for the CTCF-KD and CTCF-NT comparison
+- `SuppFigure5GH.Rmd` : Plots resulting from the differential peak analysis (CTCF in TAD boundaries and volcano plot)
+
 
 ### TAD boundaries and H3K36me3/locations
 - `Figure5_S6_TADboundaryISViolins.Rmd` : reproduces the plots on the IS (partitioned) distance to the nearest TAD boundary
